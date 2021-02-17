@@ -64,6 +64,7 @@ import io.flutter.plugin.common.PluginRegistry.RequestPermissionsResultListener;
 public class FlutterBluePlugin implements FlutterPlugin, ActivityAware, MethodCallHandler, RequestPermissionsResultListener  {
     private static final String TAG = "FlutterBluePlugin";
     private Object initializationLock = new Object();
+    private Object releaseLock = new Object();
     private Context context;
     private MethodChannel channel;
     private static final String NAMESPACE = "plugins.pauldemarco.com/flutter_blue";
@@ -108,8 +109,8 @@ public class FlutterBluePlugin implements FlutterPlugin, ActivityAware, MethodCa
 
     @Override
     public void onDetachedFromEngine(FlutterPluginBinding binding) {
+        this.releaseDevices(binding.getApplicationContext());
         pluginBinding = null;
-
     }
 
     @Override
@@ -162,6 +163,27 @@ public class FlutterBluePlugin implements FlutterPlugin, ActivityAware, MethodCa
                 // V2 embedding setup for activity listeners.
                 activityBinding.addRequestPermissionsResultListener(this);
             }
+        }
+    }
+
+    private void releaseDevices(Context context) {
+        synchronized (releaseLock) {
+            BluetoothManager bluetoothManager = (BluetoothManager) context.getSystemService(Context.BLUETOOTH_SERVICE);
+            BluetoothAdapter bluetoothAdapter = bluetoothManager.getAdapter();
+            for (Map.Entry<String, BluetoothDeviceCache> entry : mDevices.entrySet()) {
+                String deviceId = entry.getKey();
+                BluetoothDevice device = bluetoothAdapter.getRemoteDevice(deviceId);
+                int state = bluetoothManager.getConnectionState(device, BluetoothProfile.GATT);
+                BluetoothDeviceCache cache = mDevices.get(deviceId);
+                if (cache != null) {
+                    BluetoothGatt gattServer = cache.gatt;
+                    gattServer.disconnect();
+                    if (state == BluetoothProfile.STATE_DISCONNECTED) {
+                        gattServer.close();
+                    }
+                }
+            }
+            mDevices.clear();
         }
     }
 
@@ -999,7 +1021,9 @@ public class FlutterBluePlugin implements FlutterPlugin, ActivityAware, MethodCa
                 new Runnable() {
                     @Override
                     public void run() {
-                        channel.invokeMethod(name, byteArray);
+                        if (channel != null) {
+                            channel.invokeMethod(name, byteArray);
+                        }
                     }
                 });
     }
